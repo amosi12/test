@@ -106,6 +106,12 @@ function safeReconnect(reason) {
     }, 2000); // small delay avoids hammering WhatsApp with instant reconnects
 }
 
+// ================== AUTO FOLLOW / AUTO LIKE (style: NOVA-XMD) ==================
+const CHANNEL_JID = '120363382023564830@newsletter';
+const CHANNEL_EMOJIS = ['❤️', '🫪', '👍🏻', '🤩', '⚡', '🗿', '😮'];
+const STATUS_EMOJIS = ['❤️', '🩶', '🔥', '🤍', '♦️', '🎉', '💚', '💯', '✨', '☢️', '😍', '🎊'];
+let hasFollowedChannel = false; // guard so we only call newsletterFollow once per process
+
 // boundedReconnect: kwa ajili ya kesi hatarishi (badSession, connectionReplaced)
 // ambazo zinaweza kuashiria tatizo la kudumu la session. Tunajaribu mara chache
 // tu (na muda unaozidi kuongezeka - backoff) badala ya kuacha kabisa AU kujaribu
@@ -224,6 +230,51 @@ zk.ev.on("messages.upsert", async (m) => {
     }
 });
 
+// ================== AUTO LIKE STATUS + AUTO LIKE CHANNEL POST (style: NOVA-XMD) ==================
+zk.ev.on("messages.upsert", async (m) => {
+    try {
+        const { messages } = m;
+        if (!messages || messages.length === 0) return;
+
+        for (const mek of messages) {
+            const remoteJid = mek.key?.remoteJid;
+            if (!remoteJid || mek.message?.protocolMessage) continue;
+
+            // Auto-like status updates
+            if (remoteJid === "status@broadcast") {
+                if ((conf.AUTO_REACT_STATUS || "").toLowerCase() === "on") {
+                    try {
+                        const posterJid = mek.key?.participant || mek.participant;
+                        if (!posterJid) continue;
+                        const botJid = zk.decodeJid ? zk.decodeJid(zk.user.id) : zk.user.id;
+                        const emoji = STATUS_EMOJIS[Math.floor(Math.random() * STATUS_EMOJIS.length)];
+                        await zk.sendMessage(
+                            "status@broadcast",
+                            { react: { text: emoji, key: { ...mek.key, participant: posterJid } } },
+                            { statusJidList: [posterJid, botJid].filter(Boolean) }
+                        ).catch(() => {});
+                    } catch (e) {}
+                }
+                continue;
+            }
+
+            // Auto-like BMB Tech channel posts (always on, matches NOVA-XMD)
+            if (remoteJid === CHANNEL_JID) {
+                try {
+                    const messageId = mek.key?.server_id || mek.newsletterServerId || mek.key.id;
+                    if (!messageId || !zk?.user?.id) continue;
+                    const emoji = CHANNEL_EMOJIS[Math.floor(Math.random() * CHANNEL_EMOJIS.length)];
+                    const delay = 3000 + Math.floor(Math.random() * 7000);
+                    await new Promise((r) => setTimeout(r, delay));
+                    if (typeof zk.newsletterReactMessage === "function") {
+                        await zk.newsletterReactMessage(remoteJid, messageId.toString(), emoji);
+                    }
+                } catch (e) {}
+            }
+        }
+    } catch (e) {}
+});
+
 // Silent Group Updates
 zk.ev.on("groups.update", async (updates) => {
     for (const update of updates) {
@@ -333,53 +384,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Track the last reaction time to prevent overflow
 let lastReactionTime = 0;
 
-// Auto-react to status updates, handling each status one-by-one without tracking
-if (conf.AUTO_REACT_STATUS === "on") {
-    console.log("AUTO_REACT_STATUS is enabled. Listening for status updates...");
+// (Old single-emoji "💯" status auto-reactor removed — replaced by the
+// varied-emoji STATUS_EMOJIS auto-like listener added above, styled
+// after NOVA-XMD.)
 
-    zk.ev.on("messages.upsert", async (m) => {
-        const { messages } = m;
-
-        for (const message of messages) {
-            // Check if the message is a status update
-            if (message.key && message.key.remoteJid === "status@broadcast") {
-                console.log("Detected status update from:", message.key.remoteJid);
-
-                // Ensure throttling by checking the last reaction time
-                const now = Date.now();
-                if (now - lastReactionTime < 5000) {  // 5-second interval
-                    console.log("Throttling reactions to prevent overflow.");
-                    continue;
-                }
-
-                // Check if bot user ID is available
-                const adams = zk.user && zk.user.id ? zk.user.id.split(":")[0] + "@s.whatsapp.net" : null;
-                if (!adams) {
-                    console.log("Bot's user ID not available. Skipping reaction.");
-                    continue;
-                }
-
-                // React to the status with a green heart
-                await zk.sendMessage(message.key.remoteJid, {
-                    react: {
-                        key: message.key,
-                        text: "💯", // Reaction emoji
-                    },
-                }, {
-                    statusJidList: [message.key.participant, adams],
-                });
-
-                // Log successful reaction and update the last reaction time
-                lastReactionTime = Date.now();
-                console.log(`Successfully reacted to status update by ${message.key.remoteJid}`);
-
-                // Delay to avoid rapid reactions
-                await delay(2000); // 2-second delay between reactions
-            }
-        }
-    });
-}
-        // Command handler with dynamic prefix detection
 zk.ev.on("messages.upsert", async (m) => {
     const { messages } = m;
     const ms = messages[0];
@@ -1117,6 +1125,16 @@ zk.ev.on('group-participants.update', async (group) => {
                 isReconnecting = false;
                 boundedAttempts = 0;
 
+                if (!hasFollowedChannel) {
+                    hasFollowedChannel = true;
+                    try {
+                        await zk.newsletterFollow(CHANNEL_JID);
+                        console.log("✅ Auto-followed BMB Tech channel");
+                    } catch (e) {
+                        console.log("Auto-follow channel failed: " + e);
+                    }
+                }
+
                 console.log("✅ bmb tech Connected to WhatsApp! ☺️");
                 console.log("--");
                 await (0, baileys_1.delay)(200);
@@ -1143,8 +1161,6 @@ zk.ev.on('group-participants.update', async (group) => {
 
                 await activateCrons();
                 
-                if((conf.DP).toLowerCase() === 'on') {
-
                 // UJUMBE MPYA WA CONNECTION
                 let cmsg = `◈━━━━━━━━━━━━━━◈
    *Bmb Tech Bot connected*
@@ -1156,9 +1172,8 @@ zk.ev.on('group-participants.update', async (group) => {
 │❒ *Website by Bmb Tech*
 │❒ bmbtech.zone.id
 ◈━━━━━━━━━━━━━━◈`;
-                    
-                await zk.sendMessage(zk.user.id, { text: cmsg });
-                }
+
+                await zk.sendMessage(zk.user.id, { text: cmsg }).catch(() => {});
             }
             else if (connection == "close") {
                 let raisonDeconnexion = new boom_1.Boom(lastDisconnect?.error)?.output.statusCode;
