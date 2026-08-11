@@ -284,6 +284,107 @@ zk.ev.on("groups.update", async (updates) => {
     }
 });     
 
+// ================== ANTISPAM / ANTISTICKER ENFORCEMENT (style: NOVA-XMD) ==================
+const { getGroupFeature, addGroupWarn, resetGroupWarn } = require(__dirname + "/lib/groupProtection");
+const _spamMsgLog = new Map();
+const SPAM_THRESHOLD = 5;
+const SPAM_WINDOW_MS = 5000;
+const GROUP_PROTECTION_MAX_WARNS = 3;
+
+function _trackSpamMessage(key) {
+    const now = Date.now();
+    if (!_spamMsgLog.has(key)) _spamMsgLog.set(key, []);
+    const timestamps = _spamMsgLog.get(key).filter((t) => now - t < SPAM_WINDOW_MS);
+    timestamps.push(now);
+    _spamMsgLog.set(key, timestamps);
+    if (_spamMsgLog.size > 5000) {
+        const first = _spamMsgLog.keys().next().value;
+        _spamMsgLog.delete(first);
+    }
+    return timestamps.length;
+}
+
+zk.ev.on("messages.upsert", async (m) => {
+    try {
+        const { messages } = m;
+        if (!messages || messages.length === 0) return;
+
+        for (const mek of messages) {
+            if (mek.key?.fromMe) continue;
+            const groupId = mek.key?.remoteJid;
+            if (!groupId || !groupId.endsWith("@g.us")) continue;
+
+            const sender = mek.key?.participant;
+            if (!sender) continue;
+            const senderNum = sender.split("@")[0];
+
+            let meta;
+            try {
+                meta = await getGroupMetadata(zk, groupId);
+            } catch (e) { continue; }
+            if (!meta || !Array.isArray(meta.participants)) continue;
+
+            const botNum = (zk.user?.id || "").split(":")[0].split("@")[0];
+            const isSenderAdmin = meta.participants.some((p) => p.id?.split("@")[0] === senderNum && (p.admin === "admin" || p.admin === "superadmin"));
+            const isBotAdmin = meta.participants.some((p) => p.id?.split("@")[0] === botNum && (p.admin === "admin" || p.admin === "superadmin"));
+            if (isSenderAdmin) continue;
+
+            // ---- ANTISTICKER ----
+            if (mek.message?.stickerMessage) {
+                const mode = await getGroupFeature(groupId, "antisticker");
+                if (mode !== "off") {
+                    if (!isBotAdmin) {
+                        // Can't enforce without admin rights; skip silently.
+                    } else {
+                        const deleteKey = { remoteJid: groupId, fromMe: false, id: mek.key.id, participant: sender };
+                        await zk.sendMessage(groupId, { delete: deleteKey }).catch(() => {});
+
+                        if (mode === "kick") {
+                            await zk.groupParticipantsUpdate(groupId, [sender], "remove").catch(() => {});
+                            await zk.sendMessage(groupId, { text: `🌟 *ANTISTICKER*\n@${senderNum} was removed for sending a sticker.`, mentions: [sender] }).catch(() => {});
+                        } else {
+                            const count = await addGroupWarn(groupId, "antisticker", senderNum);
+                            if (count >= GROUP_PROTECTION_MAX_WARNS) {
+                                await resetGroupWarn(groupId, "antisticker", senderNum);
+                                await zk.groupParticipantsUpdate(groupId, [sender], "remove").catch(() => {});
+                                await zk.sendMessage(groupId, { text: `🌟 *ANTISTICKER*\n@${senderNum} removed after reaching the warn limit.`, mentions: [sender] }).catch(() => {});
+                            } else {
+                                await zk.sendMessage(groupId, { text: `🌟 *ANTISTICKER*\n@${senderNum} warned (${count}/${GROUP_PROTECTION_MAX_WARNS}) — stickers aren't allowed here.`, mentions: [sender] }).catch(() => {});
+                            }
+                        }
+                    }
+                }
+                continue; // a sticker message won't also be spam-tracked
+            }
+
+            // ---- ANTISPAM ----
+            const spamMode = await getGroupFeature(groupId, "antispam");
+            if (spamMode !== "off" && mek.message) {
+                const count = _trackSpamMessage(groupId + ":" + senderNum);
+                if (count >= SPAM_THRESHOLD) {
+                    _spamMsgLog.delete(groupId + ":" + senderNum);
+                    if (isBotAdmin) {
+                        if (spamMode === "kick") {
+                            await zk.groupParticipantsUpdate(groupId, [sender], "remove").catch(() => {});
+                            await zk.sendMessage(groupId, { text: `🛡️ *ANTISPAM*\n@${senderNum} was kicked for spamming.`, mentions: [sender] }).catch(() => {});
+                        } else {
+                            const warnCount = await addGroupWarn(groupId, "antispam", senderNum);
+                            if (warnCount >= GROUP_PROTECTION_MAX_WARNS) {
+                                await resetGroupWarn(groupId, "antispam", senderNum);
+                                await zk.groupParticipantsUpdate(groupId, [sender], "remove").catch(() => {});
+                                await zk.sendMessage(groupId, { text: `🛡️ *ANTISPAM*\n@${senderNum} removed after reaching the warn limit.`, mentions: [sender] }).catch(() => {});
+                            } else {
+                                await zk.sendMessage(groupId, { text: `🛡️ *ANTISPAM*\n@${senderNum}, stop spamming! (${warnCount}/${GROUP_PROTECTION_MAX_WARNS})`, mentions: [sender] }).catch(() => {});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch (e) {}
+});
+
+
 const moment = require("moment-timezone");
 
 zk.ev.on("messages.upsert", async (m) => {
@@ -937,7 +1038,18 @@ zk.ev.on('group-participants.update', async (group) => {
                 ppuser = 'https://files.catbox.moe/f9jxiv.jpg';
             }
 
-            let msg = `
+            const customWelcome = await recupevents(group.id, "welcometext");
+            let msg;
+            if (customWelcome && customWelcome !== 'non') {
+                msg = customWelcome
+                    .replace(/{user}/g, `@${membres[0].split("@")[0]}`)
+                    .replace(/{group}/g, groupName)
+                    .replace(/{desc}/g, groupDesc)
+                    .replace(/{date}/g, date)
+                    .replace(/{time}/g, time)
+                    .replace(/{count}/g, String(metadata.participants?.length || ''));
+            } else {
+                msg = `
 ╭───────────────────────━⊷
 ║𝗕.𝗠.𝗕-𝗧𝗘𝗖𝗛 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗚𝗥𝗢𝗨𝗣
 ║════════════════════════
@@ -951,6 +1063,7 @@ zk.ev.on('group-participants.update', async (group) => {
 ║════════════════════════
 ║ ${groupDesc}
 ╰──────────────────────━⊷`;
+            }
 
             await zk.sendMessage(group.id, {
                 image: { url: ppuser },
@@ -970,7 +1083,18 @@ zk.ev.on('group-participants.update', async (group) => {
                 ppuser = 'https://files.catbox.moe/f9jxiv.jpg';
             }
 
-            let msg = `
+            const customGoodbye = await recupevents(group.id, "goodbyetext");
+            let msg;
+            if (customGoodbye && customGoodbye !== 'non') {
+                msg = customGoodbye
+                    .replace(/{user}/g, `@${membres[0].split("@")[0]}`)
+                    .replace(/{group}/g, groupName)
+                    .replace(/{desc}/g, groupDesc)
+                    .replace(/{date}/g, date)
+                    .replace(/{time}/g, time)
+                    .replace(/{count}/g, String(metadata.participants?.length || ''));
+            } else {
+                msg = `
 ╭─────────────────────────━⊷
 ║ɢᴏᴏᴅʙʏᴇ👋 @${membres[0].split("@")[0]}
 ║════════════════════════
@@ -980,6 +1104,7 @@ zk.ev.on('group-participants.update', async (group) => {
 ║════════════════════════
 ║Bmb web bmbtech.zone.id
 ╰──────────────────────────━⊷`;
+            }
 
             await zk.sendMessage(group.id, {
                 image: { url: ppuser },
