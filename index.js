@@ -141,7 +141,12 @@ setTimeout(() => {
             browser: ['Bmb-Tech', "safari", "1.0.0"],
             printQRInTerminal: true,
             fireInitQueries: false,
-            shouldSyncHistoryMessage: false,
+            shouldSyncHistoryMessage: (msg) => {
+                // Skip full history sync (matches Baileys' own default
+                // behavior) while still allowing lighter sync types
+                // needed for LID mapping / group participation.
+                return msg?.syncType !== 2; // 2 = proto.HistorySync.HistorySyncType.FULL
+            },
             downloadHistory: false,
             syncFullHistory: false,
             generateHighQualityLinkPreview: true,
