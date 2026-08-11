@@ -87,9 +87,8 @@ async function authentification() {
     }
 }
 authentification();
-const store = (0, baileys_1.makeInMemoryStore)({
-    logger: pino().child({ level: "silent", stream: "store" }),
-});
+const { makeStore } = require(__dirname + "/lib/MakeStore");
+const store = makeStore();
 
 // ================== RECONNECT GUARD ==================
 // Prevents overlapping main() calls / double reconnections which
@@ -156,8 +155,8 @@ setTimeout(() => {
             //////////
             getMessage: async (key) => {
                 if (store) {
-                    const msg = await store.loadMessage(key.remoteJid, key.id, undefined);
-                    return msg.message || undefined;
+                    const msg = store.loadMessage(key.remoteJid, key.id);
+                    return msg?.message || undefined;
                 }
                 return {
                     conversation: 'An Error Occurred, Repeat Command!'
