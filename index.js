@@ -239,6 +239,11 @@ zk.ev.on("messages.upsert", async (m) => {
         for (const mek of messages) {
             const remoteJid = mek.key?.remoteJid;
             if (!remoteJid || mek.message?.protocolMessage) continue;
+            // Never act on reactions themselves — reacting to a reaction
+            // (e.g. someone reacting to a status) would otherwise let the
+            // bot's own reactions re-trigger this listener in a loop.
+            const _mtype = (0, baileys_1.getContentType)(mek.message);
+            if (_mtype === 'reactionMessage') continue;
 
             // Auto-like status updates
             if (remoteJid === "status@broadcast") {
@@ -311,6 +316,7 @@ zk.ev.on("messages.upsert", async (m) => {
 
         for (const mek of messages) {
             if (mek.key?.fromMe) continue;
+            if ((0, baileys_1.getContentType)(mek.message) === 'reactionMessage') continue;
             const groupId = mek.key?.remoteJid;
             if (!groupId || !groupId.endsWith("@g.us")) continue;
 
@@ -392,6 +398,7 @@ zk.ev.on("messages.upsert", async (m) => {
         const { messages } = m;
         const ms = messages[0];
         if (!ms.message) return;
+        if ((0, baileys_1.getContentType)(ms.message) === 'reactionMessage') return;
 
         const messageKey = ms.key;
         const remoteJid = messageKey.remoteJid;
@@ -542,6 +549,17 @@ zk.ev.on("messages.upsert", async (m) => {
                     return jid;
             };
             var mtype = (0, baileys_1.getContentType)(ms.message);
+
+            // Bail out immediately for reactionMessage events — before any
+            // logging, group-metadata fetch, or other heavy work runs.
+            // Previously this check only happened much later (inside the
+            // antibot block), so every reaction — including the bot's own
+            // auto-like reactions on statuses/channel posts — re-entered
+            // the full handler (getGroupMetadata, logging, etc). Since
+            // reacting can itself emit a reactionMessage event, that turned
+            // into an unbounded feedback loop that pinned the process and
+            // exhausted memory (Heroku R14).
+            if (mtype === 'reactionMessage') return;
             var texte = mtype == "conversation" ? ms.message.conversation : mtype == "imageMessage" ? ms.message.imageMessage?.caption : mtype == "videoMessage" ? ms.message.videoMessage?.caption : mtype == "extendedTextMessage" ? ms.message?.extendedTextMessage?.text : mtype == "buttonsResponseMessage" ?
                 ms?.message?.buttonsResponseMessage?.selectedButtonId : mtype == "listResponseMessage" ?
                 ms.message?.listResponseMessage?.singleSelectReply?.selectedRowId : mtype == "messageContextInfo" ?
@@ -559,10 +577,14 @@ zk.ev.on("messages.upsert", async (m) => {
             var nomGroupe = verifGroupe ? (infosGroupe?.subject || "") : "";
             var msgRepondu = ms.message.extendedTextMessage?.contextInfo?.quotedMessage;
             var auteurMsgRepondu = decodeJid(ms.message?.extendedTextMessage?.contextInfo?.participant);
-            //ms.message.extendedTextMessage?.contextInfo?.mentionedJid
-            // ms.message.extendedTextMessage?.contextInfo?.quotedMessage.
-            var mr = ms.Message?.extendedTextMessage?.contextInfo?.mentionedJid;
-            var utilisateur = mr ? mr : msgRepondu ? auteurMsgRepondu : "";
+            // Mentioned JIDs (users tagged with @) — collected from every message
+            // type that carries contextInfo, not just extendedTextMessage, so
+            // .remove @user / .add @user work whether the tag is on plain text,
+            // a caption, or a reply.
+            var mr = ms.message?.extendedTextMessage?.contextInfo?.mentionedJid
+                || ms.message?.[mtype]?.contextInfo?.mentionedJid
+                || [];
+            var utilisateur = (mr && mr.length > 0) ? mr[0] : (msgRepondu ? auteurMsgRepondu : "");
             var auteurMessage = verifGroupe ? (ms.key.participant ? ms.key.participant : ms.participant) : origineMessage;
             if (ms.key.fromMe) {
                 auteurMessage = idBot;
@@ -649,6 +671,8 @@ function mybotpic() {
     groupeAdmin,
     msgRepondu,
     auteurMsgRepondu,
+    mentionedJid: mr,
+    utilisateur,
     ms,
     mybotpic
 };
@@ -870,7 +894,8 @@ if (conf.AUTO_READ === 'on' && !ms.key.fromMe) {
         const baileysMsg = ms.key?.id?.startsWith('BAE5') && ms.key?.id?.length === 16;
         if (botMsg || baileysMsg) {
 
-            if (mtype === 'reactionMessage') { console.log('Je ne reagis pas au reactions') ; return} ;
+            // (reactionMessage already handled by the early return near the
+            // top of the handler — no need to re-check here.)
             const antibotactiver = await atbverifierEtatJid(origineMessage);
             if(!antibotactiver) {return};
 
