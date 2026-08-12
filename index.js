@@ -1038,151 +1038,15 @@ if (conf.AUTO_READ === 'on' && !ms.key.fromMe) {
 
 // ================== GROUP EVENTS SECTION ==================
 /******** evenement groupe update ****************/
-const { recupevents } = require('./lib/welcome');
+// Welcome/goodbye/anti-promote/anti-demote logic now lives in
+// handlers/eventHandler.js (structural move, same as NOVA-XMD's
+// index.js delegating to handlers/eventHandler.js's groupEvents()) —
+// index.js just wires up the listener and delegates.
+const { groupEvents } = require('./handlers/eventHandler');
 
 zk.ev.on('group-participants.update', async (group) => {
-    console.log('Group participants update triggered:', group);
-
     try {
-        const metadata = await zk.groupMetadata(group.id);
-        const membres = group.participants;
-        const groupName = metadata.subject || "Group";
-        const groupDesc = metadata.desc || "no group information";
-
-        // date and time 
-        const now = new Date();
-        const date = now.toLocaleDateString('en-GB');
-        const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-
-        // 🟢 WELCOME
-        if (group.action === 'add' && (await recupevents(group.id, "welcome")) === 'on') {
-            let ppuser;
-            try {
-                ppuser = await zk.profilePictureUrl(membres[0], 'image');
-            } catch (error) {
-                ppuser = 'https://files.catbox.moe/f9jxiv.jpg';
-            }
-
-            const customWelcome = await recupevents(group.id, "welcometext");
-            let msg;
-            if (customWelcome && customWelcome !== 'non') {
-                msg = customWelcome
-                    .replace(/{user}/g, `@${membres[0].split("@")[0]}`)
-                    .replace(/{group}/g, groupName)
-                    .replace(/{desc}/g, groupDesc)
-                    .replace(/{date}/g, date)
-                    .replace(/{time}/g, time)
-                    .replace(/{count}/g, String(metadata.participants?.length || ''));
-            } else {
-                msg = `
-╭───────────────────────━⊷
-║𝗕.𝗠.𝗕-𝗧𝗘𝗖𝗛 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗚𝗥𝗢𝗨𝗣
-║════════════════════════
-║ɢʀᴏᴜᴘ ɴᴀᴍᴇ ${groupName}
-║════════════════════════
-║ᴅᴀᴛᴇ ʜᴇ ᴊᴏɪɴᴇᴅ ${date}
-║════════════════════════
-║ᴛʜᴇ ᴛɪᴍᴇ ʜᴇ ᴇɴᴛᴇʀᴇᴅ ${time}
-║════════════════════════
-║ Bmb web bmbtech.zone.id
-║════════════════════════
-║ ${groupDesc}
-╰──────────────────────━⊷`;
-            }
-
-            await zk.sendMessage(group.id, {
-                image: { url: ppuser },
-                caption: msg,
-                mentions: membres
-            });
-
-            console.log('✅ Welcome message sent.');
-        }
-
-        // 🔴 GOODBYE
-        else if (group.action === 'remove' && (await recupevents(group.id, "goodbye")) === 'on') {
-            let ppuser;
-            try {
-                ppuser = await zk.profilePictureUrl(membres[0], 'image');
-            } catch (error) {
-                ppuser = 'https://files.catbox.moe/f9jxiv.jpg';
-            }
-
-            const customGoodbye = await recupevents(group.id, "goodbyetext");
-            let msg;
-            if (customGoodbye && customGoodbye !== 'non') {
-                msg = customGoodbye
-                    .replace(/{user}/g, `@${membres[0].split("@")[0]}`)
-                    .replace(/{group}/g, groupName)
-                    .replace(/{desc}/g, groupDesc)
-                    .replace(/{date}/g, date)
-                    .replace(/{time}/g, time)
-                    .replace(/{count}/g, String(metadata.participants?.length || ''));
-            } else {
-                msg = `
-╭─────────────────────────━⊷
-║ɢᴏᴏᴅʙʏᴇ👋 @${membres[0].split("@")[0]}
-║════════════════════════
-║ᴛʜᴇ ᴛɪᴍᴇ ʜᴇ ʟᴇғᴛ ${time}
-║════════════════════════
-║ᴅᴀᴛᴇ ɪs ᴏᴜᴛ ${date}
-║════════════════════════
-║Bmb web bmbtech.zone.id
-╰──────────────────────────━⊷`;
-            }
-
-            await zk.sendMessage(group.id, {
-                image: { url: ppuser },
-                caption: msg,
-                mentions: membres
-            });
-
-            console.log('✅ Goodbye message sent.');
-        }
-
-        // 🛑 ANTI-PROMOTE
-        else if (group.action === 'promote' && (await recupevents(group.id, "antipromote")) === 'on') {
-            if (
-                group.author === metadata.owner ||
-                group.author === zk.user.id ||
-                group.author === group.participants[0]
-            ) {
-                console.log('SuperUser detected, no action taken.');
-                return;
-            }
-
-            await zk.groupParticipantsUpdate(group.id, [group.author, group.participants[0]], "demote");
-
-            await zk.sendMessage(group.id, {
-                text: `🚫 @${group.author.split("@")[0]} has violated the anti-promotion rule. Both @${group.author.split("@")[0]} and @${group.participants[0].split("@")[0]} have been removed from administrative rights.`,
-                mentions: [group.author, group.participants[0]]
-            });
-
-            console.log('❌ Anti-promotion action executed.');
-        }
-
-        // 🟡 ANTI-DEMOTE
-        else if (group.action === 'demote' && (await recupevents(group.id, "antidemote")) === 'on') {
-            if (
-                group.author === metadata.owner ||
-                group.author === zk.user.id ||
-                group.author === group.participants[0]
-            ) {
-                console.log('SuperUser detected, no action taken.');
-                return;
-            }
-
-            await zk.groupParticipantsUpdate(group.id, [group.author], "demote");
-            await zk.groupParticipantsUpdate(group.id, [group.participants[0]], "promote");
-
-            await zk.sendMessage(group.id, {
-                text: `🚫 @${group.author.split("@")[0]} has violated the anti-demotion rule by removing @${group.participants[0].split("@")[0]}. Consequently, he has been stripped of administrative rights.`,
-                mentions: [group.author, group.participants[0]]
-            });
-
-            console.log('❌ Anti-demotion action executed.');
-        }
-
+        await groupEvents(zk, group);
     } catch (e) {
         console.error('❌ Error handling group participants update:', e);
     }
