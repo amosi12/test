@@ -14,33 +14,22 @@ function registerBulkCommand(nomCom, action, label, reaction) {
         categorie: 'Group',
         reaction
     }, async (dest, client, commandeOptions) => {
-        const { repondre, infosGroupe, verifGroupe, superUser, idBot } = commandeOptions;
+        const { repondre, infosGroupe, verifGroupe, verifAdmin, superUser, idBot } = commandeOptions;
 
         if (!verifGroupe) {
             return repondre('🚫 *This command is for group use only.*');
         }
+        if (!(verifAdmin || superUser)) {
+            return repondre('Sorry, I cannot perform this action because you are not an administrator of the group.');
+        }
 
         const membresGroupe = await infosGroupe.participants;
 
-        const memberAdmin = (list) => {
-            const admin = [];
-            for (const m of list) {
-                if (m.admin == null) continue;
-                admin.push(m.id);
-            }
-            return admin;
-        };
-        const admins = memberAdmin(membresGroupe);
-        const callerId = commandeOptions.auteurMessage;
-        const callerIsAdmin = admins.includes(callerId);
-        const botIsAdmin = admins.includes(idBot);
-
-        if (!(callerIsAdmin || superUser)) {
-            return repondre('Sorry, I cannot perform this action because you are not an administrator of the group.');
-        }
-        if (!botIsAdmin) {
-            return repondre('Sorry, I cannot perform this action because I am not an administrator of the group.');
-        }
+        // No pre-check of the bot's own admin status via groupMetadata
+        // here — comparing JIDs against groupMetadata().participants is
+        // unreliable on this Baileys fork's LID system and wrongly
+        // reported "not an administrator" even when the bot was admin.
+        // We just attempt each update below and skip ones that fail.
 
         let targets;
         if (action === 'promote') {
