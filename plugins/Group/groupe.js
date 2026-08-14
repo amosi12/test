@@ -93,51 +93,31 @@ bmbtz({ nomCom: "link", categorie: 'Group', reaction: "🙋" }, async (dest, cli
 });
 /** *nommer un membre comme admin */
 bmbtz({ nomCom: "promote", categorie: 'Group', reaction: "🔃" }, async (dest, client, commandeOptions) => {
-  let { repondre, infosGroupe, verifGroupe, auteurMessage, superUser, idBot, utilisateur } = commandeOptions;
-  let membresGroupe = verifGroupe ? await infosGroupe.participants : ""
+  let { repondre, verifGroupe, verifAdmin, superUser, utilisateur } = commandeOptions;
   if (!verifGroupe) { return repondre("For groups only"); }
+  if (!(verifAdmin || superUser)) { return repondre("Sorry I cannot perform this action because you are not an administrator of the group."); }
+  if (!utilisateur) { return repondre("Tag or reply to the member you want to promote."); }
 
-  const verifMember = (user) => {
-    for (const m of membresGroupe) {
-      if (m.id !== user) continue;
-      else return true;
-    }
-  }
-
-  const memberAdmin = (membresGroupe) => {
-    let admin = [];
-    for (m of membresGroupe) {
-      if (m.admin == null) continue;
-      admin.push(m.id);
-    }
-    return admin;
-  }
-
-  const a = verifGroupe ? memberAdmin(membresGroupe) : '';
-
-  let admin = verifGroupe ? a.includes(utilisateur) : false;
-  let membre = utilisateur ? verifMember(utilisateur) : false;
-  let autAdmin = verifGroupe ? a.includes(auteurMessage) : false;
-  let botAdmin = verifGroupe ? a.includes(idBot) : false;
+  // No pre-check of the bot's own admin status here — comparing the
+  // bot's JID against groupMetadata().participants is unreliable on
+  // this Baileys fork's LID system (a participant can be listed under
+  // a different JID form than what client.user.id decodes to), which
+  // caused this command to wrongly report "I am not an administrator"
+  // even when the bot WAS admin. Instead, just attempt the action and
+  // let WhatsApp's own response tell us if it failed — same approach
+  // NOVA-XMD's promote.js uses.
   try {
-    if (autAdmin || superUser) {
-      if (utilisateur) {
-        if (botAdmin) {
-          if (membre) {
-            if (admin == false) {
-              var txt = `🎊🎊🎊  @${utilisateur.split("@")[0]} rose in rank.\n
+    await client.groupParticipantsUpdate(dest, [utilisateur], "promote");
+    var txt = `🎊🎊🎊  @${utilisateur.split("@")[0]} rose in rank.\n
                       he/she has been named group administrator.`
-              await client.groupParticipantsUpdate(dest, [utilisateur], "promote");
-              client.sendMessage(dest, { text: txt, mentions: [utilisateur] })
-            } else { return repondre("This member is already an administrator of the group.") }
-
-          } else { return repondre("This user is not part of the group."); }
-        }
-        else { return repondre("Sorry, I cannot perform this action because I am not an administrator of the group.") }
-
-      } else { repondre("Tag or reply to the member you want to promote."); }
-    } else { return repondre("Sorry I cannot perform this action because you are not an administrator of the group.") }
-  } catch (e) { repondre("oups " + e) }
+    await client.sendMessage(dest, { text: txt, mentions: [utilisateur] })
+  } catch (e) {
+    const msg = (e.message || e).toString();
+    if (msg.includes('forbidden') || msg.includes('not-authorized') || msg.includes('403')) {
+      return repondre("Failed to promote. Make sure I'm an admin and the user is in the group.");
+    }
+    repondre("oups " + e)
+  }
 
 })
 
@@ -145,54 +125,24 @@ bmbtz({ nomCom: "promote", categorie: 'Group', reaction: "🔃" }, async (dest, 
 /** ***demettre */
 
 bmbtz({ nomCom: "demote", categorie: 'Group', reaction: "🔃" }, async (dest, client, commandeOptions) => {
-  let { repondre, infosGroupe, verifGroupe, auteurMessage, superUser, idBot, utilisateur } = commandeOptions;
-  let membresGroupe = verifGroupe ? await infosGroupe.participants : ""
+  let { repondre, verifGroupe, verifAdmin, superUser, utilisateur } = commandeOptions;
   if (!verifGroupe) { return repondre("For groups only"); }
+  if (!(verifAdmin || superUser)) { return repondre("Sorry I cannot perform this action because you are not an administrator of the group."); }
+  if (!utilisateur) { return repondre("Tag or reply to the member you want to demote."); }
 
-  const verifMember = (user) => {
-    for (const m of membresGroupe) {
-      if (m.id !== user) continue;
-      else return true;
-    }
-  }
-
-  const memberAdmin = (membresGroupe) => {
-    let admin = [];
-    for (m of membresGroupe) {
-      if (m.admin == null) continue;
-      admin.push(m.id);
-    }
-    return admin;
-  }
-
-  const a = verifGroupe ? memberAdmin(membresGroupe) : '';
-
-  let admin = verifGroupe ? a.includes(utilisateur) : false;
-  let membre = utilisateur ? verifMember(utilisateur) : false;
-  let autAdmin = verifGroupe ? a.includes(auteurMessage) : false;
-  let botAdmin = verifGroupe ? a.includes(idBot) : false;
+  // (See the comment in the promote command above — no bot-admin
+  // JID pre-check here either, for the same LID-related reason.)
   try {
-    if (autAdmin || superUser) {
-      if (utilisateur) {
-        if (botAdmin) {
-          if (membre) {
-            if (admin == false) {
-
-              repondre("This member is not a group administrator.")
-
-            } else {
-              var txt = `@${utilisateur.split("@")[0]} was removed from his position as a group administrator\n`
-              await client.groupParticipantsUpdate(dest, [utilisateur], "demote");
-              client.sendMessage(dest, { text: txt, mentions: [utilisateur] })
-            }
-
-          } else { return repondre("This user is not part of the group."); }
-        }
-        else { return repondre("Sorry I cannot perform this action because I am not an administrator of the group.") }
-
-      } else { repondre("Tag or reply to the member you want to demote."); }
-    } else { return repondre("Sorry I cannot perform this action because you are not an administrator of the group.") }
-  } catch (e) { repondre("oups " + e) }
+    await client.groupParticipantsUpdate(dest, [utilisateur], "demote");
+    var txt = `@${utilisateur.split("@")[0]} was removed from his position as a group administrator\n`
+    await client.sendMessage(dest, { text: txt, mentions: [utilisateur] })
+  } catch (e) {
+    const msg = (e.message || e).toString();
+    if (msg.includes('forbidden') || msg.includes('not-authorized') || msg.includes('403')) {
+      return repondre("Failed to demote. Make sure I'm an admin and the user is in the group.");
+    }
+    repondre("oups " + e)
+  }
 
 })
 
@@ -204,23 +154,13 @@ bmbtz({ nomCom: "remove", aliases: ["kick"], categorie: 'Group', reaction: "🦵
 
   if (!verifGroupe) { return repondre("for groups only"); }
   if (!(verifAdmin || superUser)) { return repondre("Sorry, I cannot perform this action because you are not an administrator of the group."); }
-
-  const groupMetadata = await client.groupMetadata(dest);
-  const participants = groupMetadata.participants;
-
-  const admins = participants.filter((m) => m.admin != null).map((m) => m.id);
-  const botIsAdmin = admins.includes(idBot);
-
-  if (!botIsAdmin) { return repondre("Sorry, I cannot perform this action because I am not an administrator of the group."); }
-
   if (!utilisateur) { return repondre("Tag or reply to the member you want to remove."); }
-
-  const isMember = participants.some((m) => m.id === utilisateur);
-  if (!isMember) { return repondre("This user is not part of the group."); }
-
-  if (admins.includes(utilisateur)) { return repondre("This member cannot be removed because he is an administrator of the group."); }
-
   if (utilisateur === idBot) { return repondre("I cannot remove myself."); }
+
+  // No pre-check of the bot's own admin status via groupMetadata here —
+  // see the comment on the promote command above for why (LID JID
+  // mismatch on this Baileys fork made that check unreliable and wrongly
+  // reported "not an administrator" even when the bot was admin).
 
   try {
     await client.groupParticipantsUpdate(dest, [utilisateur], "remove");
@@ -229,6 +169,10 @@ bmbtz({ nomCom: "remove", aliases: ["kick"], categorie: 'Group', reaction: "🦵
       mentions: [utilisateur]
     });
   } catch (e) {
+    const msg = (e.message || e).toString();
+    if (msg.includes('forbidden') || msg.includes('not-authorized') || msg.includes('403')) {
+      return repondre("Failed to remove. Make sure I'm an admin and the user isn't a group admin themselves.");
+    }
     repondre("oups " + e);
   }
 });
@@ -560,7 +504,7 @@ bmbtz({ nomCom: "gpp", categorie: 'Group' }, async (dest, client, commandeOption
 });
 
 /////////////
-bmbtz({ nomCom: "hidetag", categorie: 'Group', reaction: "🎤" }, async (dest, client, commandeOptions) => {
+bmbtz({ nomCom: "tag", categorie: 'Group', reaction: "🎤" }, async (dest, client, commandeOptions) => {
   const { repondre, msgRepondu, verifGroupe, arg, verifAdmin, superUser } = commandeOptions;
 
   if (!verifGroupe) return repondre("🚫 *This command is allowed only in groups.*");
