@@ -1208,6 +1208,13 @@ client.ev.on('group-participants.update', async (group) => {
             else if (connection == "close") {
                 let raisonDeconnexion = new boom_1.Boom(lastDisconnect?.error)?.output.statusCode;
 
+                // Full error detail for diagnosis — statusCode alone (e.g. "403")
+                // doesn't say WHY WhatsApp rejected the connection. Boom errors
+                // carry a message/data payload from WhatsApp's own response.
+                console.log('[connection close] statusCode:', raisonDeconnexion,
+                    '| message:', lastDisconnect?.error?.message,
+                    '| data:', JSON.stringify(lastDisconnect?.error?.data || lastDisconnect?.error?.output?.payload || {}));
+
                 if (raisonDeconnexion === baileys_1.DisconnectReason.badSession) {
                     console.log('Session id error, rescan again...');
                     boundedReconnect('badSession');
@@ -1230,7 +1237,22 @@ client.ev.on('group-participants.update', async (group) => {
                 else if (raisonDeconnexion === baileys_1.DisconnectReason.restartRequired) {
                     console.log('redémarrage en cours ▶️');
                     safeReconnect('restartRequired');
-                } else {
+                }
+                else if (raisonDeconnexion === 403 || raisonDeconnexion === baileys_1.DisconnectReason?.forbidden) {
+                    // 403/forbidden means WhatsApp itself is actively rejecting the
+                    // connection — this is NOT a transient network error, so
+                    // retrying immediately (or forever) won't fix it and just
+                    // keeps hammering WhatsApp's servers with the same rejected
+                    // session, which can prolong any rate-limit/ban in place.
+                    // Common causes: the linked device/session was banned or
+                    // unlinked by WhatsApp (sometimes triggered by sending an
+                    // abnormally high volume of messages/reactions in a short
+                    // time), or the account needs to be re-paired from scratch.
+                    console.log('❌ WhatsApp rejected the connection (403/forbidden). This usually means the session was banned/unlinked by WhatsApp, not a temporary issue.');
+                    console.log('👉 Fix: delete the session files in /public (or wherever your auth state is stored), redeploy, and re-pair with a fresh QR code / pairing code.');
+                    console.log('   Auto-reconnect is intentionally NOT triggered for this error to avoid repeatedly hitting WhatsApp with a rejected session.');
+                }
+                else {
                     // NOTE: pm2 restart all imeondolewa hapa kwa makusudi.
                     // Ilikuwa ikigongana na safeReconnect/main() na kusababisha
                     // reconnections nyingi kwa wakati mmoja (double-restart loop).
