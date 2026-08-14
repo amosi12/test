@@ -38,6 +38,23 @@ let fs = require("fs-extra");
 let path = require("path");
 const FileType = require('file-type');
 const { Sticker, createSticker, StickerTypes } = require('wa-sticker-formatter');
+
+// Wire fluent-ffmpeg to the bundled ffmpeg binary from @ffmpeg-installer/ffmpeg.
+// Heroku's stack has no system ffmpeg installed (no ffmpeg buildpack is
+// configured in app.json), so any command using fluent-ffmpeg for
+// audio/video conversion would otherwise fail with "ffmpeg not found".
+// This makes every fluent-ffmpeg call anywhere in the project (it's a
+// singleton module) use the bundled binary automatically — no extra
+// buildpack needed.
+try {
+    const ffmpeg = require('fluent-ffmpeg');
+    const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+    ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+    console.log('✅ ffmpeg path set to bundled binary:', ffmpegInstaller.path);
+} catch (e) {
+    console.log('⚠️ Could not set bundled ffmpeg path:', e.message);
+}
+
 //import chalk from 'chalk'
 const { verifierEtatJid , recupererActionJid } = require("./lib/antilien");
 const { atbverifierEtatJid , atbrecupererActionJid } = require("./lib/antibot");
@@ -137,8 +154,7 @@ function boundedReconnect(reason) {
 }
 // =======================================================
 
-setTimeout(() => {
-    async function main() {
+async function main() {
         const { version, isLatest } = await (0, baileys_1.fetchLatestBaileysVersion)();
         const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(__dirname + "/public");
         const sockOptions = {
@@ -1302,6 +1318,8 @@ client.ev.on('group-participants.update', async (group) => {
         /** ************* */
         return client;
     }
+
+setTimeout(() => {
     let fichier = require.resolve(__filename);
     fs.watchFile(fichier, () => {
         fs.unwatchFile(fichier);
