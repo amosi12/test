@@ -55,9 +55,10 @@ async function sendBox(chatId, client, ms, title, message) {
  * index.js actually reads via getConf('KEY') — see index.js's
  * getConf() helper.
  */
-function registerToggleCommand(commandName, settingKey, enabledValue, disabledValue, title, enabledText, disabledText) {
+function registerToggleCommand(commandName, settingKey, enabledValue, disabledValue, title, enabledText, disabledText, aliasList) {
   bmbtz({
     nomCom: commandName,
+    alias: aliasList || [],
     categorie: "Settings"
   }, async (chatId, client, context) => {
     const { ms, repondre, superUser, arg } = context;
@@ -104,7 +105,8 @@ registerToggleCommand("anticall", "ANTICALL", "on", "off", "ANTI-CALL MODE",
 
 registerToggleCommand("autolikestatus", "AUTO_REACT_STATUS", "on", "off", "AUTO-LIKE STATUS",
   "✅ Auto-like status has been *enabled* successfully.",
-  "❌ Auto-like status has been *disabled* successfully.");
+  "❌ Auto-like status has been *disabled* successfully.",
+  ["likestatus", "autolike"]);
 
 registerToggleCommand("readstatus", "AUTO_READ_STATUS", "on", "off", "AUTO-READ STATUS",
   "✅ Auto-read status has been *enabled* successfully.",
