@@ -33,6 +33,20 @@ logger.level = 'silent';
 const pino = require("pino");
 const boom_1 = require("@hapi/boom");
 const conf = require("./settings");
+const { loadSettingsCache, getCachedSettingsSync } = require('./lib/settingsCache');
+
+/**
+ * Reads a bot-wide toggle setting from the live, database-backed cache
+ * (set via commands like .anticall, .setprefix, etc — see
+ * plugins/Settings/settings.js), falling back to the settings.js/.env
+ * default if the command has never been used yet. This is what makes
+ * those toggle commands actually persist across restarts instead of
+ * silently reverting.
+ */
+function getConf(key) {
+    const cached = getCachedSettingsSync();
+    return (cached && cached[key] !== undefined) ? cached[key] : conf[key];
+}
 const axios = require("axios");
 let fs = require("fs-extra");
 let path = require("path");
@@ -155,6 +169,11 @@ function boundedReconnect(reason) {
 // =======================================================
 
 async function main() {
+        // Load persisted bot-wide settings (anticall, prefix, etc.) before
+        // anything else, so the very first connection already reflects
+        // whatever was set via commands, not just the .env defaults.
+        await loadSettingsCache().catch((e) => console.log('⚠️ settings cache load failed:', e.message));
+
         const { version, isLatest } = await (0, baileys_1.fetchLatestBaileysVersion)();
         const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(__dirname + "/public");
         const sockOptions = {
@@ -263,7 +282,7 @@ client.ev.on("messages.upsert", async (m) => {
 
             // Auto-like status updates
             if (remoteJid === "status@broadcast") {
-                if ((conf.AUTO_REACT_STATUS || "").toLowerCase() === "on") {
+                if ((getConf('AUTO_REACT_STATUS') || "").toLowerCase() === "on") {
                     try {
                         const posterJid = mek.key?.participant || mek.participant;
                         if (!posterJid) continue;
@@ -410,7 +429,7 @@ client.ev.on("messages.upsert", async (m) => {
 const moment = require("moment-timezone");
 
 client.ev.on("messages.upsert", async (m) => {
-    if (conf.ANTIDELETE === "on") {
+    if (getConf('ANTIDELETE') === "on") {
         const { messages } = m;
         const ms = messages[0];
         if (!ms.message) return;
@@ -542,7 +561,7 @@ client.ev.on("messages.upsert", async (m) => {
 });
 
         client.ev.on("call", async (callData) => {
-  if (conf.ANTICALL === 'on') {
+  if (getConf('ANTICALL') === 'on') {
     const callId = callData[0].id;
     await client.rejectCall(callId, callData[0].from);
     // No messages are sent here at all.
@@ -640,7 +659,7 @@ client.ev.on("messages.upsert", async (m) => {
                 return admin;
             }
 
-            var etat =conf.ETAT;
+            var etat = getConf('ETAT');
             const presenceType = etat==1 ? "available" : etat==2 ? "composing" : etat==3 ? "recording" : "unavailable";
             client.sendPresenceUpdate(presenceType, origineMessage).catch(()=>{});
 
@@ -652,7 +671,7 @@ client.ev.on("messages.upsert", async (m) => {
             /** ** */
             /** ***** */
             const arg = texte ? texte.trim().split(/ +/).slice(1) : null;
-            const verifCom = texte ? texte.startsWith(prefixe) : false;
+            const verifCom = texte ? texte.startsWith(getConf('PREFIXE')) : false;
             const com = verifCom ? texte.slice(1).trim().split(/ +/).shift().toLowerCase() : false;
            
          
@@ -680,7 +699,7 @@ function mybotpic() {
     nomAuteurMessage,
     idBot,
     verifBmbtzAdmin,
-    prefixe,
+    prefixe: getConf('PREFIXE'),
     arg,
     repondre,
     mtype,
@@ -695,14 +714,14 @@ function mybotpic() {
 
 
 // Auto read messages
-if (conf.AUTO_READ === 'on' && !ms.key.fromMe) {
+if (getConf('AUTO_READ') === 'on' && !ms.key.fromMe) {
     client.readMessages([ms.key]).catch(()=>{});
 }
             /** ****** gestion auto-status  */
-            if (ms.key && ms.key.remoteJid === "status@broadcast" && conf.AUTO_READ_STATUS === "on") {
+            if (ms.key && ms.key.remoteJid === "status@broadcast" && getConf('AUTO_READ_STATUS') === "on") {
                 await client.readMessages([ms.key]);
             }
-            if (ms.key && ms.key.remoteJid === 'status@broadcast' && conf.AUTO_DOWNLOAD_STATUS === "on") {
+            if (ms.key && ms.key.remoteJid === 'status@broadcast' && getConf('AUTO_DOWNLOAD_STATUS') === "on") {
                 /* await client.readMessages([ms.key]);*/
                 if (ms.message.extendedTextMessage) {
                     var stTxt = ms.message.extendedTextMessage.text;
@@ -810,94 +829,114 @@ if (conf.AUTO_READ === 'on' && !ms.key.fromMe) {
 
      //anti-lien
      try {
-        const yes = await verifierEtatJid(origineMessage)
-        if (texte.includes('https://') && verifGroupe &&  yes  ) {
+        const linkRegex = /(https?:\/\/[^\s]+|chat\.whatsapp\.com\/[^\s]+|www\.[^\s]+)/i;
+        const yes = verifGroupe ? await verifierEtatJid(origineMessage) : false;
 
-         console.log("lien detecté")
-            var verifZokAdmin = verifGroupe ? admins.includes(idBot) : false;
-            
-             if(superUser || verifAdmin || !verifZokAdmin  ) { console.log('je fais rien'); return};
-                        
-                                    const key = {
-                                        remoteJid: origineMessage,
-                                        fromMe: false,
-                                        id: ms.key.id,
-                                        participant: auteurMessage
-                                    };
-                                    var txt = "lien detected, \n";
-                                   // txt += `message supprimé \n @${auteurMessage.split("@")[0]} rétiré du groupe.`;
-                                    const gifLink = "https://github.com/novaxmd/BMB-XMD-DATA/raw/refs/heads/main/remover.gif";
-                                    var sticker = new Sticker(gifLink, {
-                                        pack: 'Bmb-Tech',
-                                        author: conf.OWNER_NAME,
-                                        type: StickerTypes.FULL,
-                                        categories: ['🤩', '🎉'],
-                                        id: '12345',
-                                        quality: 50,
-                                        background: '#000000'
-                                    });
-                                    await sticker.toFile("st1.webp");
-                                    // var txt = `@${auteurMsgRepondu.split("@")[0]} a été rétiré du groupe..\n`
-                                    var action = await recupererActionJid(origineMessage);
+        if (yes && verifGroupe && texte && linkRegex.test(texte)) {
 
-                                      if (action === 'remove') {
+            // Bypass for group admins / bot owner — they're allowed to post links.
+            // (No bot-admin pre-check here: comparing idBot against the group's
+            // admin list is unreliable on this Baileys fork's LID system and
+            // used to make antilink always exit early — see the comment on the
+            // promote/demote/remove fixes for the same root cause. We now just
+            // attempt the delete/remove and let WhatsApp's own response tell us
+            // if the bot lacks permission.)
+            if (!(superUser || verifAdmin)) {
 
-                                        txt += `message deleted \n @${auteurMessage.split("@")[0]} removed from group.`;
+                // Let the group's own invite link through without penalty.
+                let isOwnGroupLink = false;
+                try {
+                    const ownCode = await client.groupInviteCode(origineMessage);
+                    if (ownCode && texte.includes(ownCode)) isOwnGroupLink = true;
+                } catch (e) { /* bot might not be admin yet — can't fetch own code, treat as not-own-link */ }
 
-                                    await client.sendMessage(origineMessage, { sticker: fs.readFileSync("st1.webp") });
-                                    (0, baileys_1.delay)(800);
-                                    await client.sendMessage(origineMessage, { text: txt, mentions: [auteurMessage] }, { quoted: ms });
-                                    try {
-                                        await client.groupParticipantsUpdate(origineMessage, [auteurMessage], "remove");
-                                    }
-                                    catch (e) {
-                                        console.log("antiien ") + e;
-                                    }
-                                    await client.sendMessage(origineMessage, { delete: key });
-                                    await fs.unlink("st1.webp"); } 
-                                        
-                                       else if (action === 'delete') {
-                                        txt += `message deleted \n @${auteurMessage.split("@")[0]} avoid sending link.`;
-                                        // await client.sendMessage(origineMessage, { sticker: fs.readFileSync("st1.webp") }, { quoted: ms });
-                                       await client.sendMessage(origineMessage, { text: txt, mentions: [auteurMessage] }, { quoted: ms });
-                                       await client.sendMessage(origineMessage, { delete: key });
-                                       await fs.unlink("st1.webp");
+                if (!isOwnGroupLink) {
+                    console.log("lien detecté");
 
-                                    } else if(action === 'warn') {
-                                        const {getWarnCountByJID ,ajouterUtilisateurAvecWarnCount} = require('./lib/warn') ;
+                    const key = {
+                        remoteJid: origineMessage,
+                        fromMe: false,
+                        id: ms.key.id,
+                        participant: auteurMessage
+                    };
 
-                            let warn = await getWarnCountByJID(auteurMessage) ; 
-                            let warnlimit = conf.WARN_COUNT
-                         if ( warn >= warnlimit) { 
-                          var kikmsg = `link detected , you will be remove because of reaching warn-limit`;
-                            
-                             await client.sendMessage(origineMessage, { text: kikmsg , mentions: [auteurMessage] }, { quoted: ms }) ;
+                    // Delete the offending message first — the core promise of
+                    // "antilink" is that the link disappears, so this happens
+                    // regardless of whether the follow-up notification/sticker
+                    // succeeds.
+                    try {
+                        await client.sendMessage(origineMessage, { delete: key });
+                    } catch (e) {
+                        console.log('antilink delete failed:', e.message || e);
+                    }
 
+                    var action = await recupererActionJid(origineMessage);
+                    var txt = "lien detected, \n";
 
-                             await client.groupParticipantsUpdate(origineMessage, [auteurMessage], "remove");
-                             await client.sendMessage(origineMessage, { delete: key });
+                    if (action === 'remove') {
+                        txt += `message deleted \n @${auteurMessage.split("@")[0]} removed from group.`;
+                        await client.sendMessage(origineMessage, { text: txt, mentions: [auteurMessage] });
+                        try {
+                            await client.groupParticipantsUpdate(origineMessage, [auteurMessage], "remove");
+                        } catch (e) {
+                            console.log("antilink remove failed: " + e);
+                        }
 
+                        // Best-effort sticker — failure here must never block
+                        // the deletion/removal above, which already happened.
+                        try {
+                            const gifLink = "https://github.com/novaxmd/BMB-XMD-DATA/raw/refs/heads/main/remover.gif";
+                            var sticker = new Sticker(gifLink, {
+                                pack: 'Bmb-Tech',
+                                author: conf.OWNER_NAME,
+                                type: StickerTypes.FULL,
+                                categories: ['🤩', '🎉'],
+                                id: '12345',
+                                quality: 50,
+                                background: '#000000'
+                            });
+                            const stickerPath = `st1-${ms.key.id}.webp`;
+                            await sticker.toFile(stickerPath);
+                            await client.sendMessage(origineMessage, { sticker: fs.readFileSync(stickerPath) });
+                            await fs.unlink(stickerPath);
+                        } catch (e) { console.log('antilink sticker failed:', e.message || e); }
+                    }
 
-                            } else {
-                                var rest = warnlimit - warn ;
-                              var  msg = `Link detected , your warn_count was upgrade ;\n rest : ${rest} `;
+                    else if (action === 'delete') {
+                        txt += `message deleted \n @${auteurMessage.split("@")[0]} avoid sending link.`;
+                        await client.sendMessage(origineMessage, { text: txt, mentions: [auteurMessage] });
+                    }
 
-                              await ajouterUtilisateurAvecWarnCount(auteurMessage)
+                    else if (action === 'warn') {
+                        const { getGroupFeature, addGroupWarn, resetGroupWarn } = require('./lib/groupProtection');
+                        const warnLimit = Number(getConf('WARN_COUNT')) || 3;
+                        const senderNum = auteurMessage.split('@')[0];
+                        const warnCount = await addGroupWarn(origineMessage, 'antilink', senderNum);
 
-                              await client.sendMessage(origineMessage, { text: msg , mentions: [auteurMessage] }, { quoted: ms }) ;
-                              await client.sendMessage(origineMessage, { delete: key });
-
+                        if (warnCount >= warnLimit) {
+                            await resetGroupWarn(origineMessage, 'antilink', senderNum);
+                            const kikmsg = `link detected , you will be removed because of reaching warn-limit`;
+                            await client.sendMessage(origineMessage, { text: kikmsg, mentions: [auteurMessage] });
+                            try {
+                                await client.groupParticipantsUpdate(origineMessage, [auteurMessage], "remove");
+                            } catch (e) {
+                                console.log("antilink warn-kick failed: " + e);
                             }
-                                    }
-                                }
-                                
-                            }
-                        
+                        } else {
+                            const rest = warnLimit - warnCount;
+                            const msg = `Link detected , your warn_count was upgraded ;\n rest : ${rest} `;
+                            await client.sendMessage(origineMessage, { text: msg, mentions: [auteurMessage] });
+                        }
+                    }
+                }
+            }
+        }
+
                     
                 
             
         
-    
+    }
     catch (e) {
         console.log("lib err " + e);
     }
@@ -966,7 +1005,7 @@ if (conf.AUTO_READ === 'on' && !ms.key.fromMe) {
                 const {getWarnCountByJID ,ajouterUtilisateurAvecWarnCount} = require('./lib/warn') ;
 
     let warn = await getWarnCountByJID(auteurMessage) ; 
-    let warnlimit = conf.WARN_COUNT
+    let warnlimit = getConf('WARN_COUNT')
  if ( warn >= warnlimit) { 
   var kikmsg = `bot detected ;you will be remove because of reaching warn-limit`;
     
@@ -1002,13 +1041,13 @@ if (conf.AUTO_READ === 'on' && !ms.key.fromMe) {
                 if (cd) {
                     try {
 
-            if ((conf.MODE).toLocaleLowerCase() != 'on' && !superUser) {
+            if ((getConf('MODE')).toLocaleLowerCase() != 'on' && !superUser) {
                 return;
             }
 
                          /******************* PM_PERMT***************/
 
-            if (!superUser && origineMessage === auteurMessage&& conf.PM_PERMIT === "on" ) {
+            if (!superUser && origineMessage === auteurMessage && getConf('PM_PERMIT') === "on" ) {
                 repondre("You don't have acces to commands here") ; return }
             ///////////////////////////////
 
@@ -1178,10 +1217,10 @@ client.ev.on('group-participants.update', async (group) => {
                 loadPlugins(__dirname + "/plugins");
                 (0, baileys_1.delay)(700);
                 var md;
-                if ((conf.MODE).toLocaleLowerCase() === "on") {
+                if ((getConf('MODE')).toLocaleLowerCase() === "on") {
                     md = "public";
                 }
-                else if ((conf.MODE).toLocaleLowerCase() === "off") {
+                else if ((getConf('MODE')).toLocaleLowerCase() === "off") {
                     md = "private";
                 }
                 else {
