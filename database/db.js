@@ -68,6 +68,7 @@ const _GS_DEFAULTS = {
     antidemote: 'off',
     antipromote: 'off',
     antilink: 'off',
+    antilink_action: 'delete',
     welcome: 'off',
     goodbye: 'off',
     warn_limit: 3,
@@ -98,7 +99,7 @@ const PG_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS group_settings (
         jid TEXT PRIMARY KEY, antidelete INTEGER DEFAULT 1,
         events INTEGER DEFAULT 0, antidemote TEXT DEFAULT 'off', antipromote TEXT DEFAULT 'off',
-        antilink TEXT DEFAULT 'off',
+        antilink TEXT DEFAULT 'off', antilink_action TEXT DEFAULT 'delete',
         welcome TEXT DEFAULT 'off', goodbye TEXT DEFAULT 'off', warn_limit INTEGER DEFAULT 3,
         custom_welcome TEXT DEFAULT '', custom_goodbye TEXT DEFAULT '',
         antisticker TEXT DEFAULT 'off',
@@ -301,6 +302,38 @@ async function getWarnLimit(jid) {
     return settings.warn_limit ?? 3;
 }
 
+// ---------------------------------------------------------------------
+// Global bot-wide settings (key/value) — for toggles like ANTICALL,
+// AUTO_REACT_STATUS, PREFIXE, etc. that used to only live in settings.js
+// (env-var derived) and get mutated in-memory by commands, which never
+// survived a restart. These now persist for real.
+// ---------------------------------------------------------------------
+
+async function getSettings() {
+    await ensureReady();
+    if (_backend === 'pg') {
+        const rows = await _pg.query('SELECT key, value FROM settings');
+        const out = {};
+        for (const row of rows.rows) out[row.key] = row.value;
+        return out;
+    }
+    return { ..._jsonData.settings };
+}
+
+async function updateSetting(key, value) {
+    await ensureReady();
+    if (_backend === 'pg') {
+        await _pg.query(
+            `INSERT INTO settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = $2`,
+            [key, String(value)]
+        );
+        return;
+    }
+    _jsonData.settings[key] = String(value);
+    _jsonSave();
+}
+
 module.exports = {
     getBackend,
     getGroupSettings,
@@ -317,4 +350,6 @@ module.exports = {
     setWarnLimit,
     getWarnLimit,
     ensureReady,
+    getSettings,
+    updateSetting,
 };
