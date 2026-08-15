@@ -285,15 +285,25 @@ client.ev.on("messages.upsert", async (m) => {
                 if ((getConf('AUTO_REACT_STATUS') || "").toLowerCase() === "on") {
                     try {
                         const posterJid = mek.key?.participant || mek.participant;
-                        if (!posterJid) continue;
-                        const botJid = client.decodeJid ? client.decodeJid(client.user.id) : client.user.id;
+                        if (!posterJid) {
+                            console.log('[autolikestatus] skipped: no posterJid on status message');
+                            continue;
+                        }
+                        // client.decodeJid is NOT a real Baileys socket method
+                        // (it doesn't exist), so this always fell through to
+                        // the raw client.user.id, which can include a device
+                        // suffix (":12@s.whatsapp.net"). Strip it manually.
+                        const botJid = (client.user.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
                         const emoji = STATUS_EMOJIS[Math.floor(Math.random() * STATUS_EMOJIS.length)];
                         await client.sendMessage(
                             "status@broadcast",
                             { react: { text: emoji, key: { ...mek.key, participant: posterJid } } },
                             { statusJidList: [posterJid, botJid].filter(Boolean) }
-                        ).catch(() => {});
-                    } catch (e) {}
+                        );
+                        console.log('[autolikestatus] reacted to status from', posterJid, 'with', emoji);
+                    } catch (e) {
+                        console.log('[autolikestatus] failed:', e.message || e);
+                    }
                 }
                 continue;
             }
@@ -1242,7 +1252,21 @@ client.ev.on('group-participants.update', async (group) => {
 │❒ bmbtech.zone.id
 ◈━━━━━━━━━━━━━━◈`;
 
-                await client.sendMessage(client.user.id, { text: cmsg }).catch(() => {});
+                // Send to the owner's own number (NUMERO_OWNER) rather than
+                // client.user.id directly — the latter can include a device
+                // suffix (e.g. ":12@s.whatsapp.net") that WhatsApp silently
+                // drops messages to (the send call resolves with no error,
+                // but nothing ever shows up in any chat). Stripping the
+                // device part and/or targeting the configured owner number
+                // is what actually lands the message in "my DM".
+                const ownerNum = (getConf('NUMERO_OWNER') || conf.NUMERO_OWNER || '').replace(/[^0-9]/g, '');
+                const startMsgTarget = ownerNum
+                    ? ownerNum + '@s.whatsapp.net'
+                    : (client.user.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
+
+                await client.sendMessage(startMsgTarget, { text: cmsg }).catch((e) => {
+                    console.log('⚠️ Could not send start message to', startMsgTarget, ':', e.message || e);
+                });
             }
             else if (connection == "close") {
                 let raisonDeconnexion = new boom_1.Boom(lastDisconnect?.error)?.output.statusCode;
