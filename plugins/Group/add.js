@@ -19,16 +19,46 @@ bmbtz({
     categorie: 'Group',
     reaction: '🪄'
 }, async (dest, client, commandeOptions) => {
-    const { repondre, verifAdmin, verifGroupe, arg, ms, nomAuteurMessage } = commandeOptions;
+    const { repondre, verifAdmin, verifGroupe, superUser, idBot, arg, ms, nomAuteurMessage } = commandeOptions;
 
     if (!verifGroupe) return repondre('*This command works in groups only!*');
-    if (!verifAdmin) return repondre('You are not an admin here!');
+
+    // Caller check: admin OR the bot owner (superUser) — matches
+    // NOVA-XMD's middleware.js `!isDev && !context.isAdmin` bypass logic.
+    // The previous version required verifAdmin with no bypass at all, so
+    // even the owner typing the command on their own device could get
+    // blocked if verifAdmin's JID comparison didn't line up perfectly
+    // (the same LID/PN mismatch class of issue fixed elsewhere in this
+    // project for promote/demote/remove/antibot).
+    if (!(verifAdmin || superUser)) {
+        return repondre('You are not an admin here!');
+    }
 
     let groupMetadata;
     try {
         groupMetadata = await client.groupMetadata(dest);
     } catch {
         return repondre('Failed to fetch group metadata.');
+    }
+
+    // Bot-admin check, ported from NOVA-XMD's middleware.js: instead of a
+    // strict JID equality (which fails whenever the bot's own JID form
+    // doesn't exactly match how it's listed in participants — the LID vs
+    // phone-number mismatch this whole project keeps running into), this
+    // does a tolerant substring/suffix match on the numeric part.
+    const botNum = (idBot || client.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+    let isBotAdmin = false;
+    for (const p of groupMetadata.participants || []) {
+        const pJid = p.id || p.jid || '';
+        const pNum = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+        const isAdminRole = p.admin === 'admin' || p.admin === 'superadmin';
+        if (isAdminRole && pNum && botNum && (pNum === botNum || pNum.endsWith(botNum) || botNum.endsWith(pNum))) {
+            isBotAdmin = true;
+            break;
+        }
+    }
+    if (!isBotAdmin) {
+        return repondre('👮 *BOT NOT ADMIN*\n━━━━━━━━━━━━━━━━\nI need admin rights to add members.\nMake me admin first.\n━━━━━━━━━━━━━━━━\n© bmb tech');
     }
 
     if (!arg[0]) return repondre('Provide number to be added. Example:\nadd 255XXXXX457');
