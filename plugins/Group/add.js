@@ -41,25 +41,43 @@ bmbtz({
         return repondre('Failed to fetch group metadata.');
     }
 
-    // Bot-admin check, ported from NOVA-XMD's middleware.js: instead of a
-    // strict JID equality (which fails whenever the bot's own JID form
-    // doesn't exactly match how it's listed in participants — the LID vs
-    // phone-number mismatch this whole project keeps running into), this
-    // does a tolerant substring/suffix match on the numeric part.
+    // Bot-admin check, ported from NOVA-XMD's middleware.js style
+    // (tolerant substring/suffix match instead of strict JID equality).
+    // NON-BLOCKING: only logged, not enforced. Reasoning — .link in this
+    // same project calls client.groupInviteCode() with NO pre-check at
+    // all, which only succeeds if the bot really is a group admin; since
+    // that command works, the bot genuinely IS admin, yet this same
+    // fuzzy-match logic still reported "not admin" here — meaning the
+    // mismatch runs deeper than a simple LID/PN suffix difference for
+    // this fork/session. Rather than block a working feature on a
+    // check we can't yet trust, we log what we see (for diagnosis) and
+    // let the actual add-participant request below decide via its own
+    // WhatsApp error codes (401/403/408) — the same pattern already
+    // proven reliable for promote/demote/remove/antibot in this project.
     const botNum = (idBot || client.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
     let isBotAdmin = false;
+
+    console.log('[add] idBot:', idBot, '| botNum:', botNum);
+    console.log('[add] participants:', JSON.stringify(
+        (groupMetadata.participants || []).map(p => ({ id: p.id, jid: p.jid, lid: p.lid, admin: p.admin }))
+    ));
+
     for (const p of groupMetadata.participants || []) {
-        const pJid = p.id || p.jid || '';
-        const pNum = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
         const isAdminRole = p.admin === 'admin' || p.admin === 'superadmin';
-        if (isAdminRole && pNum && botNum && (pNum === botNum || pNum.endsWith(botNum) || botNum.endsWith(pNum))) {
-            isBotAdmin = true;
-            break;
+        if (!isAdminRole) continue;
+
+        const candidates = [p.id, p.jid, p.lid].filter(Boolean);
+        for (const c of candidates) {
+            const pNum = c.split('@')[0].split(':')[0].replace(/\D/g, '');
+            if (pNum && botNum && (pNum === botNum || pNum.endsWith(botNum) || botNum.endsWith(pNum))) {
+                isBotAdmin = true;
+                break;
+            }
         }
+        if (isBotAdmin) break;
     }
-    if (!isBotAdmin) {
-        return repondre('👮 *BOT NOT ADMIN*\n━━━━━━━━━━━━━━━━\nI need admin rights to add members.\nMake me admin first.\n━━━━━━━━━━━━━━━━\n© bmb tech');
-    }
+
+    console.log('[add] isBotAdmin resolved to:', isBotAdmin, isBotAdmin ? '' : '(proceeding anyway — see comment above)');
 
     if (!arg[0]) return repondre('Provide number to be added. Example:\nadd 255XXXXX457');
 
@@ -120,6 +138,10 @@ bmbtz({
         });
     } catch (queryErr) {
         console.log('[add] group-add query failed:', queryErr?.message || queryErr);
+        const msg = (queryErr?.message || queryErr || '').toString();
+        if (msg.includes('forbidden') || msg.includes('not-authorized') || msg.includes('403')) {
+            return repondre('👮 *BOT NOT ADMIN*\n━━━━━━━━━━━━━━━━\nWhatsApp rejected this — I need admin rights to add members.\nMake me admin first.\n━━━━━━━━━━━━━━━━\n© bmb tech');
+        }
         return repondre('Failed to add user(s) to the group!');
     }
 
