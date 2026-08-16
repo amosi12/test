@@ -47,6 +47,8 @@ function getConf(key) {
     const cached = getCachedSettingsSync();
     return (cached && cached[key] !== undefined) ? cached[key] : conf[key];
 }
+
+const { cacheLidPhone, resolveLidToJid, resolveLidForStatus } = require('./lib/lidResolver');
 const axios = require("axios");
 let fs = require("fs-extra");
 let path = require("path");
@@ -212,6 +214,31 @@ async function main() {
         };
         const client = (0, baileys_1.default)(sockOptions);
 store.bind(client.ev);
+
+// Passively learn LID↔phone-number mappings as Baileys itself resolves
+// them internally — this is what makes @lid-only identities (see
+// lib/lidResolver.js for why they're a problem) already resolved by the
+// time a status/message needing them arrives, instead of only trying to
+// resolve on-demand.
+if (client.signalRepository?.lidMapping?.on) {
+    client.signalRepository.lidMapping.on('update', (updates) => {
+        for (const update of updates) {
+            if (update.lid && update.pn) {
+                const lidNum = update.lid.split('@')[0].split(':')[0];
+                const phoneNum = update.pn.split('@')[0].split(':')[0].replace(/\D/g, '');
+                cacheLidPhone(lidNum, phoneNum);
+            }
+        }
+    });
+}
+client.ev.on('lid-mapping.update', (map) => {
+    for (const [lid, phoneNumber] of Object.entries(map || {})) {
+        const lidClean = lid.split('@')[0].split(':')[0];
+        const phoneClean = String(phoneNumber).split('@')[0].split(':')[0].replace(/\D/g, '');
+        cacheLidPhone(lidClean, phoneClean);
+    }
+});
+
    const rateLimit = new Map();
 
 // Silent Rate Limiting (No Logs)
@@ -284,23 +311,64 @@ client.ev.on("messages.upsert", async (m) => {
             if (remoteJid === "status@broadcast") {
                 if ((getConf('AUTO_REACT_STATUS') || "").toLowerCase() === "on") {
                     try {
-                        const posterJid = mek.key?.participant || mek.participant;
+                        // Dedup: some events fire more than once for the same
+                        // status (e.g. on reconnect/history sync replay) —
+                        // without this, the bot could react to the same
+                        // status repeatedly.
+                        if (!global._statusSeen) global._statusSeen = new Set();
+                        const statusId = mek.key?.id || '';
+                        if (statusId) {
+                            if (global._statusSeen.has(statusId)) continue;
+                            global._statusSeen.add(statusId);
+                            if (global._statusSeen.size > 300) global._statusSeen.delete(global._statusSeen.values().next().value);
+                        }
+
+                        let posterJid = mek.key?.participant || mek.participant;
                         if (!posterJid) {
                             console.log('[autolikestatus] skipped: no posterJid on status message');
                             continue;
                         }
-                        // client.decodeJid is NOT a real Baileys socket method
-                        // (it doesn't exist), so this always fell through to
-                        // the raw client.user.id, which can include a device
-                        // suffix (":12@s.whatsapp.net"). Strip it manually.
-                        const botJid = (client.user.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
+
+                        // WhatsApp's newer identity system represents many
+                        // senders as an opaque "@lid" JID instead of their
+                        // real phone-number JID ("@s.whatsapp.net"). This is
+                        // a known, currently-unresolved limitation across
+                        // Baileys itself (see WhiskeySockets/Baileys issues
+                        // #1718, #2133, #2154, #2263 on GitHub) — status
+                        // reactions sent against an unresolved @lid are
+                        // frequently accepted by the send call (no error)
+                        // but never actually show up on WhatsApp.
+                        // lib/lidResolver.js tries several strategies (cache,
+                        // signalRepository, database, group scan) to resolve
+                        // it to the real phone JID first; if none succeed we
+                        // still attempt the react with the raw @lid as a
+                        // best-effort fallback since it occasionally works
+                        // anyway depending on WhatsApp's server-side state.
+                        const resolvedJid = posterJid.endsWith('@lid')
+                            ? await resolveLidForStatus(client, posterJid)
+                            : posterJid;
+
+                        let botJid;
+                        try {
+                            botJid = client.decodeJid ? client.decodeJid(client.user.id) : null;
+                        } catch (e) { botJid = null; }
+                        if (!botJid) {
+                            botJid = (client.user.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                        }
+
                         const emoji = STATUS_EMOJIS[Math.floor(Math.random() * STATUS_EMOJIS.length)];
+
                         await client.sendMessage(
                             "status@broadcast",
-                            { react: { text: emoji, key: { ...mek.key, participant: posterJid } } },
-                            { statusJidList: [posterJid, botJid].filter(Boolean) }
+                            { react: { text: emoji, key: { ...mek.key, participant: resolvedJid } } },
+                            { statusJidList: [resolvedJid, botJid].filter(Boolean) }
                         );
-                        console.log('[autolikestatus] reacted to status from', posterJid, 'with', emoji);
+
+                        console.log(
+                            '[autolikestatus] reacted to status from', posterJid,
+                            resolvedJid !== posterJid ? `(resolved to ${resolvedJid})` : '(unresolved @lid — best-effort, may not show on WhatsApp)',
+                            'with', emoji
+                        );
                     } catch (e) {
                         console.log('[autolikestatus] failed:', e.message || e);
                     }
@@ -594,6 +662,19 @@ client.ev.on("messages.upsert", async (m) => {
                     return jid;
             };
             var mtype = (0, baileys_1.getContentType)(ms.message);
+
+            // Opportunistically learn LID↔phone-number mappings whenever
+            // Baileys already gives us both forms on the same message
+            // (key.participant as @lid + key.participantAlt as the real
+            // phone JID) — free, no lookup needed. This is what warms up
+            // the cache over time so later actions needing a phone number
+            // for someone (e.g. reacting to their status) already have it
+            // resolved instead of needing an expensive on-demand lookup.
+            if (ms.key?.participant?.endsWith('@lid') && ms.key?.participantAlt && !ms.key.participantAlt.endsWith('@lid')) {
+                const lidNum = ms.key.participant.split('@')[0].split(':')[0];
+                const phoneNum = ms.key.participantAlt.split('@')[0].split(':')[0].replace(/\D/g, '');
+                cacheLidPhone(lidNum, phoneNum);
+            }
 
             // Bail out immediately for reactionMessage events — before any
             // logging, group-metadata fetch, or other heavy work runs.
