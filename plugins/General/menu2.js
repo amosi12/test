@@ -78,7 +78,7 @@ bmbtz({ nomCom: "menu2", categorie: "General" }, async (dest, client, commandOpt
 
     menuMessage += `┗🌟 *𝙱.𝙼.𝙱-𝚇𝙼𝙳 - Developed by the Best!* 🌟`;
 
-    const imageUrl = "https://url.bmbxmd.workers.dev/45MZ0B.jpg";
+    const imageUrl = "https://url.bmbxmd.workers.menubmb.png";
 
     try {
         await client.sendMessage(dest, {
