@@ -30,6 +30,7 @@ const _jsonDefaults = () => ({
     sudo_users: [],
     banned_users: [],
     warn_data: {},
+    lid_mapping: {},
 });
 
 let _jsonData = null;
@@ -95,6 +96,7 @@ let _pg = null;
 let _ready = null;
 
 const PG_SCHEMA = [
+    `CREATE TABLE IF NOT EXISTS lid_mapping (lid TEXT PRIMARY KEY, phone TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS group_settings (
         jid TEXT PRIMARY KEY, antidelete INTEGER DEFAULT 1,
@@ -334,6 +336,37 @@ async function updateSetting(key, value) {
     _jsonSave();
 }
 
+// ---------------------------------------------------------------------
+// LID (Linked ID) ↔ phone number mapping — persisted so that once a
+// WhatsApp @lid identity is resolved to a real phone number (via
+// signalRepository, group participant data, or participantAlt on any
+// message), it stays resolved across restarts instead of needing to be
+// re-discovered every time the bot reconnects.
+// ---------------------------------------------------------------------
+
+async function mapLidToPhone(lid, phone) {
+    await ensureReady();
+    if (_backend === 'pg') {
+        await _pg.query(
+            `INSERT INTO lid_mapping (lid, phone) VALUES ($1, $2)
+             ON CONFLICT (lid) DO UPDATE SET phone = $2`,
+            [lid, phone]
+        );
+        return;
+    }
+    _jsonData.lid_mapping[lid] = phone;
+    _jsonSave();
+}
+
+async function getPhoneFromLid(lid) {
+    await ensureReady();
+    if (_backend === 'pg') {
+        const row = await _pg.query('SELECT phone FROM lid_mapping WHERE lid = $1', [lid]);
+        return row.rows[0]?.phone || null;
+    }
+    return _jsonData.lid_mapping[lid] || null;
+}
+
 module.exports = {
     getBackend,
     getGroupSettings,
@@ -352,4 +385,6 @@ module.exports = {
     ensureReady,
     getSettings,
     updateSetting,
+    mapLidToPhone,
+    getPhoneFromLid,
 };
