@@ -20,7 +20,7 @@
   "author": "B.M.B-TECH",
   "license": "ISC",
   "dependencies": {
-    "@whiskeysockets/baileys": "github:xhclintohn/Baileys#beta-test",
+    "@whiskeysockets/baileys": "npm:bmbtech-baileys@latest",
     "@hapi/boom": "^10.0.1",
     "@xaviabot/fb-downloader": "^1.0.14",
     "aptoide-scraper": "^1.0.1",
